@@ -33,6 +33,23 @@ def create_table():
     )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS faculty_subject (
+        faculty_name TEXT PRIMARY KEY,
+        subject TEXT NOT NULL
+    )
+    """)
+
+    # Backfill faculty_subject mapping from existing feedback rows if needed.
+    cursor.execute("SELECT faculty_name, subject FROM feedback GROUP BY faculty_name")
+    existing_pairs = cursor.fetchall()
+    for faculty_name, subject in existing_pairs:
+        if faculty_name and subject:
+            cursor.execute(
+                "INSERT OR IGNORE INTO faculty_subject (faculty_name, subject) VALUES (?, ?)",
+                (faculty_name, subject),
+            )
+
     cursor.execute("PRAGMA table_info(feedback)")
     columns = [row[1] for row in cursor.fetchall()]
 
@@ -58,22 +75,27 @@ def create_table():
 
 create_table()
 
-print("Table created successfully at:", DB_NAME)
-
-def insert_feedback(faculty_name, subject, rating, feedback_text, student_name: str = ""):
-    sentiment = analyze_sentiment(feedback_text)
-
+def ensure_faculty_subject(faculty_name: str, subject: str):
+    if not faculty_name or not subject:
+        return
     conn = get_connection()
     cursor = conn.cursor()
-
-    cursor.execute("""
-    INSERT INTO feedback
-    (student_name, faculty_name, subject, rating, feedback_text, sentiment)
-    VALUES (?, ?, ?, ?, ?, ?)
-    """, (student_name or "", faculty_name, subject, rating, feedback_text, sentiment))
-
+    cursor.execute(
+        "INSERT INTO faculty_subject (faculty_name, subject) VALUES (?, ?)"
+        " ON CONFLICT(faculty_name) DO UPDATE SET subject=excluded.subject",
+        (faculty_name, subject),
+    )
     conn.commit()
     conn.close()
+
+
+def get_all_faculty_subject_map():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT faculty_name, subject FROM faculty_subject ORDER BY faculty_name COLLATE NOCASE")
+    rows = cursor.fetchall()
+    conn.close()
+    return {faculty: subject for faculty, subject in rows}
 
 
 def fetch_feedback():
@@ -81,8 +103,7 @@ def fetch_feedback():
     cursor = conn.cursor()
 
     # Ensure we return columns in a stable, explicit order so callers
-    # (dashboards, pages) can map fields reliably even if the table
-    # schema changed over time via ALTER TABLE.
+    # can map fields reliably even if the table schema changed over time.
     cursor.execute("PRAGMA table_info(feedback)")
     existing_cols = [row[1] for row in cursor.fetchall()]
 
@@ -102,7 +123,6 @@ def fetch_feedback():
 
     select_cols = [c for c in preferred_order if c in existing_cols]
     if not select_cols:
-        # fallback to selecting all if something odd happened
         cursor.execute("SELECT * FROM feedback")
     else:
         q = "SELECT " + ",".join(select_cols) + " FROM feedback"
@@ -111,3 +131,22 @@ def fetch_feedback():
     rows = cursor.fetchall()
     conn.close()
     return rows
+
+
+def insert_feedback(faculty_name, subject, rating, feedback_text, student_name: str = ""):
+    sentiment = analyze_sentiment(feedback_text)
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    INSERT INTO feedback
+    (student_name, faculty_name, subject, rating, feedback_text, sentiment)
+    VALUES (?, ?, ?, ?, ?, ?)
+    """, (student_name or "", faculty_name, subject, rating, feedback_text, sentiment))
+
+    conn.commit()
+    conn.close()
+
+    ensure_faculty_subject(faculty_name, subject)
+

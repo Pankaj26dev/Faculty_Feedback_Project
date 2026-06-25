@@ -1,5 +1,5 @@
 import streamlit as st
-from database.db import insert_feedback
+from database.db import insert_feedback, get_all_faculty_subject_map
 
 st.set_page_config(
     page_title="Student Feedback",
@@ -9,52 +9,48 @@ st.set_page_config(
 
 st.title("Student Feedback Form")
 
-faculty_name = st.text_input(
-    "Faculty Name"
-)
+faculty_map = get_all_faculty_subject_map()
+faculty_choices = [f"{name} ({subject})" for name, subject in sorted(faculty_map.items(), key=lambda item: item[0].lower())]
+faculty_choices.append("Add new faculty")
 
-subject = st.text_input(
-    "Subject"
-)
+with st.form(key="feedback_form"):
+    student_name = st.text_input("Your name (optional)")
+    faculty_choice = st.selectbox("Select faculty", faculty_choices)
 
-rating = st.selectbox(
-    "Rating",
-    [1, 2, 3, 4, 5]
-)
-
-feedback_text = st.text_area(
-    "Feedback",
-    height=150
-)
-
-submit = st.button("Submit Feedback")
-
-if submit:
-    # Basic validation
-    errors = []
-    if not faculty_name or not faculty_name.strip():
-        errors.append("Please enter the faculty name.")
-    if not subject or not subject.strip():
-        errors.append("Please enter the subject.")
-    if not feedback_text or not feedback_text.strip():
-        errors.append("Please provide feedback text.")
-
-    if errors:
-        for e in errors:
-            st.error(e)
+    if faculty_choice == "Add new faculty":
+        faculty_name = st.text_input("Faculty name")
+        subject = st.text_input("Subject")
     else:
-        try:
-            # Ensure rating is an integer
-            rating_value = int(rating)
-            insert_feedback(
-                faculty_name.strip(),
-                subject.strip(),
-                rating_value,
-                feedback_text.strip(),
-            )
-            st.success("Feedback submitted successfully!")
-            # Optionally clear the form inputs by reloading the page or
-            # instructing the user to refresh. Streamlit doesn't provide a
-            # simple programmatic way to clear text_input values here.
-        except Exception as exc:
-            st.error(f"An error occurred while saving feedback: {exc}")
+        faculty_name, subject = faculty_choice.rsplit(" (", 1)
+        subject = subject.rstrip(")")
+        st.markdown(f"**Subject:** {subject}")
+
+    rating = st.selectbox("Rating", [1, 2, 3, 4, 5])
+    feedback_text = st.text_area("Feedback", height=150)
+    submit = st.form_submit_button("Submit Feedback")
+
+    if submit:
+        errors = []
+        if not faculty_name or not faculty_name.strip():
+            errors.append("Please enter the faculty name.")
+        if not subject or not subject.strip():
+            errors.append("Please provide or confirm the subject.")
+        if not feedback_text or not feedback_text.strip():
+            errors.append("Please provide feedback text.")
+
+        if errors:
+            for e in errors:
+                st.error(e)
+        else:
+            try:
+                rating_value = int(rating)
+                insert_feedback(
+                    faculty_name.strip(),
+                    subject.strip(),
+                    rating_value,
+                    feedback_text.strip(),
+                    student_name.strip(),
+                )
+                st.success("Feedback submitted successfully!")
+            except Exception as exc:
+                st.error(f"An error occurred while saving feedback: {exc}")
