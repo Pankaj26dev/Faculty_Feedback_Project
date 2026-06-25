@@ -61,13 +61,26 @@ def _parse_feedback_rows(rows):
 
 def _aggregate_recommendations(df: pd.DataFrame, theme_map: Dict[str, Dict], fallback: bool = True) -> List[str]:
     recs = []
+    generic_terms = {"Average / Neutral Feedback", "Mixed: Good Knowledge, Poor Delivery", "No Specific Feedback", "General"}
+    
     if "Recommendations" in df.columns:
         for raw in df["Recommendations"]:
             for value in _safe_json_load(raw):
                 if isinstance(value, str) and value.strip():
-                    recs.append(value.strip())
-    if recs:
-        return list(dict.fromkeys(recs))
+                    val = value.strip()
+                    if val not in generic_terms:
+                        recs.append(val)
+    
+    # Deduplicate and filter
+    filtered_recs = []
+    seen = set()
+    for rec in recs:
+        if rec not in seen and rec not in generic_terms:
+            filtered_recs.append(rec)
+            seen.add(rec)
+    
+    if filtered_recs:
+        return filtered_recs
 
     if fallback:
         texts = df["Feedback"].astype(str).tolist()[:8]
@@ -78,7 +91,7 @@ def _aggregate_recommendations(df: pd.DataFrame, theme_map: Dict[str, Dict], fal
             try:
                 theme_recs = recommend_from_text(text, top_k=2)
                 for _, rec, score in theme_recs:
-                    if rec and rec not in out:
+                    if rec and rec not in out and rec not in generic_terms:
                         out.append(rec)
             except Exception:
                 continue
@@ -87,16 +100,23 @@ def _aggregate_recommendations(df: pd.DataFrame, theme_map: Dict[str, Dict], fal
 
 
 def _top_themes(df: pd.DataFrame, theme_map: Dict[str, Dict], positive: bool = True, top_n: int = 4) -> List[str]:
+    generic_terms = {"Average / Neutral Feedback", "Mixed: Good Knowledge, Poor Delivery", "No Specific Feedback", "General"}
+    
     if "Theme IDs" in df.columns:
         theme_ids = []
         for raw in df["Theme IDs"]:
             theme_ids.extend(_safe_json_load(raw))
         if theme_ids:
             counts = Counter(theme_ids)
-            names = [theme_map.get(tid, {}).get("theme_name", tid) for tid, _ in counts.most_common(top_n)]
+            names = [
+                theme_map.get(tid, {}).get("theme_name", tid) 
+                for tid, _ in counts.most_common(top_n * 2)  # Get more, then filter
+            ]
+            # Filter out generic items
+            names = [n for n in names if n not in generic_terms][:top_n]
             return names
 
-    # fallback: use stored recommendations by theme names or raw text
+    # Fallback: use stored recommendations by theme names or raw text
     sentiments = df["Sentiment"].astype(str).str.lower() if "Sentiment" in df.columns else None
     if sentiments is not None:
         subset = df[sentiments.str.contains("positive") if positive else ~sentiments.str.contains("positive")]
@@ -107,11 +127,12 @@ def _top_themes(df: pd.DataFrame, theme_map: Dict[str, Dict], positive: bool = T
     for text in texts:
         try:
             theme_recs = recommend_from_text(text, top_k=2)
-            candidates.extend([rec for _, rec, _ in theme_recs])
+            candidates.extend([rec for _, rec, _ in theme_recs if rec not in generic_terms])
         except Exception:
             continue
     counts = Counter(candidates)
-    return [name for name, _ in counts.most_common(top_n)]
+    result = [name for name, _ in counts.most_common(top_n) if name not in generic_terms]
+    return result
 
 
 def render_faculty_dashboard():
