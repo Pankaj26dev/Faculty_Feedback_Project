@@ -6,7 +6,6 @@ import pandas as pd
 import streamlit as st
 
 from ai.knowledge_base import get_theme_keyword_map
-from ai.recommendation_engine import recommend_from_text
 from database.db import fetch_feedback, get_all_faculty_subject_map
 
 
@@ -59,84 +58,88 @@ def _parse_feedback_rows(rows):
     return df
 
 
-def _aggregate_recommendations(df: pd.DataFrame, theme_map: Dict[str, Dict], fallback: bool = True) -> List[str]:
-    recs = []
+def _render_metric_card(title: str, value: str, caption: str):
+    st.markdown(
+        f"""
+        <div class='dashboard-card'>
+            <div class='section-header'>{title}</div>
+            <div style='font-size:2rem; font-weight:700; margin-bottom: 8px;'>{value}</div>
+            <div class='small-note'>{caption}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _aggregate_recommendations(df: pd.DataFrame, theme_map: Dict[str, Dict]) -> List[str]:
     generic_terms = {"Average / Neutral Feedback", "Mixed: Good Knowledge, Poor Delivery", "No Specific Feedback", "General"}
-    
+    recs = []
+
     if "Recommendations" in df.columns:
         for raw in df["Recommendations"]:
             for value in _safe_json_load(raw):
-                if isinstance(value, str) and value.strip():
+                if isinstance(value, str):
                     val = value.strip()
-                    if val not in generic_terms:
+                    if val and val not in generic_terms:
                         recs.append(val)
-    
-    # Deduplicate and filter
-    filtered_recs = []
-    seen = set()
-    for rec in recs:
-        if rec not in seen and rec not in generic_terms:
-            filtered_recs.append(rec)
-            seen.add(rec)
-    
-    if filtered_recs:
-        return filtered_recs
+    if recs:
+        return list(dict.fromkeys(recs))[:8]
 
-    if fallback:
-        texts = df["Feedback"].astype(str).tolist()[:8]
-        out = []
-        for text in texts:
-            if not text.strip():
-                continue
-            try:
-                theme_recs = recommend_from_text(text, top_k=2)
-                for _, rec, score in theme_recs:
-                    if rec and rec not in out and rec not in generic_terms:
-                        out.append(rec)
-            except Exception:
-                continue
-        return out
+    if "Theme IDs" in df.columns:
+        all_ids = []
+        for raw in df["Theme IDs"]:
+            all_ids.extend(_safe_json_load(raw))
+        counts = Counter(all_ids)
+        recs = []
+        for tid, _ in counts.most_common(8):
+            info = theme_map.get(tid, {})
+            rec = info.get("recommendation") or info.get("theme_name", tid)
+            if rec and rec not in generic_terms and rec not in recs:
+                recs.append(rec)
+        if recs:
+            return recs
+
     return []
 
 
 def _top_themes(df: pd.DataFrame, theme_map: Dict[str, Dict], positive: bool = True, top_n: int = 4) -> List[str]:
     generic_terms = {"Average / Neutral Feedback", "Mixed: Good Knowledge, Poor Delivery", "No Specific Feedback", "General"}
-    
+
     if "Theme IDs" in df.columns:
         theme_ids = []
         for raw in df["Theme IDs"]:
             theme_ids.extend(_safe_json_load(raw))
         if theme_ids:
             counts = Counter(theme_ids)
-            names = [
-                theme_map.get(tid, {}).get("theme_name", tid) 
-                for tid, _ in counts.most_common(top_n * 2)  # Get more, then filter
-            ]
-            # Filter out generic items
-            names = [n for n in names if n not in generic_terms][:top_n]
-            return names
+            filtered_ids = []
+            for tid, _ in counts.most_common():
+                info = theme_map.get(tid, {})
+                sentiment = str(info.get("sentiment", "")).lower()
+                if positive and sentiment == "positive":
+                    filtered_ids.append(tid)
+                elif not positive and sentiment == "negative":
+                    filtered_ids.append(tid)
 
-    # Fallback: use stored recommendations by theme names or raw text
-    sentiments = df["Sentiment"].astype(str).str.lower() if "Sentiment" in df.columns else None
-    if sentiments is not None:
-        subset = df[sentiments.str.contains("positive") if positive else ~sentiments.str.contains("positive")]
-    else:
-        subset = df
-    texts = subset["Feedback"].astype(str).tolist()[:8]
-    candidates = []
-    for text in texts:
-        try:
-            theme_recs = recommend_from_text(text, top_k=2)
-            candidates.extend([rec for _, rec, _ in theme_recs if rec not in generic_terms])
-        except Exception:
-            continue
-    counts = Counter(candidates)
-    result = [name for name, _ in counts.most_common(top_n) if name not in generic_terms]
-    return result
+            if not filtered_ids:
+                filtered_ids = [tid for tid, _ in counts.most_common()]
+
+            names = [theme_map.get(tid, {}).get("theme_name", tid) for tid in filtered_ids[:top_n]]
+            return [n for n in names if n not in generic_terms][:top_n]
+
+    return []
 
 
 def render_faculty_dashboard():
     st.title("Unfiltered: Faculty Insight & Feedback Analytics")
+    st.sidebar.title("Faculty dashboard filters")
+    min_rating = st.sidebar.slider("Minimum rating", 1, 5, 1)
+    sentiment_filter = st.sidebar.multiselect(
+        "Include sentiment",
+        ["Positive", "Neutral", "Negative"],
+        default=["Positive", "Neutral", "Negative"],
+    )
+    show_recent = st.sidebar.checkbox("Show recent feedback", value=True)
+
     faculty_map = get_all_faculty_subject_map()
     faculty_names = list(faculty_map.keys())
 
@@ -152,60 +155,87 @@ def render_faculty_dashboard():
     subject = faculty_map.get(selected, "Unknown subject")
     rows = fetch_feedback()
     df = _parse_feedback_rows(rows)
-    df = df[df["Faculty"] == selected] if "Faculty" in df.columns else df
+    if "Faculty" in df.columns:
+        df = df[df["Faculty"] == selected]
+
+    if "Rating" in df.columns:
+        df = df[df["Rating"] >= min_rating]
+
+    if "Sentiment" in df.columns and sentiment_filter:
+        df = df[df["Sentiment"].isin(sentiment_filter)]
+
     if df.empty:
-        st.warning(f"No feedback yet for {selected}.")
+        st.warning(f"No feedback matches the current filters for {selected}.")
         return
 
-    # Header row
+    total_feedback = len(df)
+    avg_rating = round(df["Rating"].mean(), 2) if "Rating" in df.columns else "N/A"
+    sentiment_counts = df["Sentiment"].value_counts().to_dict() if "Sentiment" in df.columns else {}
+    positive = sentiment_counts.get("Positive", 0)
+    neutral = sentiment_counts.get("Neutral", 0)
+    negative = sentiment_counts.get("Negative", 0)
+    theme_map = get_theme_keyword_map()
+    top_positive = _top_themes(df, theme_map, positive=True, top_n=4)
+    top_concerns = _top_themes(df, theme_map, positive=False, top_n=4)
+    recommendations = _aggregate_recommendations(df, theme_map)
+
     st.markdown("---")
     cols = st.columns([2, 2, 2, 2])
     cols[0].markdown(f"**Faculty:** {selected}")
     cols[1].markdown(f"**Subject:** {subject}")
-    cols[2].markdown(f"**Total Feedback:** {len(df)}")
-    cols[3].markdown(f"**Average Rating:** {round(df['Rating'].mean(), 2)}")
+    cols[2].markdown(f"**Feedback Count:** {total_feedback}")
+    cols[3].markdown(f"**Avg Rating:** {avg_rating}")
     st.markdown("---")
 
-    # KPI cards
-    sentiment_counts = df["Sentiment"].value_counts().to_dict()
-    positive = sentiment_counts.get("Positive", 0)
-    neutral = sentiment_counts.get("Neutral", 0)
-    negative = sentiment_counts.get("Negative", 0)
-
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("Total", len(df))
-    k2.metric("Avg Rating", round(df["Rating"].mean(), 2))
-    k3.metric("Positive", positive)
-    k4.metric("Neutral", neutral)
-    k5.metric("Negative", negative)
+    detail_cols = st.columns(4)
+    _render_metric_card("Positive comments", str(positive), "Number of feedback entries tagged positive.")
+    _render_metric_card("Neutral comments", str(neutral), "Number of neutral or mixed feedback entries.")
+    _render_metric_card("Negative comments", str(negative), "Number of feedback entries tagged negative.")
+    unique_themes = 0
+    if "Theme IDs" in df.columns:
+        unique_themes = len({tid for raw in df["Theme IDs"] for tid in _safe_json_load(raw)})
+    _render_metric_card("Theme insights", str(unique_themes), "Distinct themes identified in this faculty's feedback.")
 
     st.markdown("---")
 
-    # Charts
     chart_cols = st.columns(2)
     try:
         import plotly.express as px
 
-        rating_series = df["Rating"].value_counts().sort_index().reset_index()
-        rating_series.columns = ["Rating", "Count"]
-        fig_dist = px.bar(rating_series, x="Rating", y="Count", title="Rating Distribution", labels={"Rating": "Rating", "Count": "Count"})
-        chart_cols[0].plotly_chart(fig_dist, use_container_width=True)
+        if "Rating" in df.columns:
+            rating_series = df["Rating"].value_counts().sort_index().reset_index()
+            rating_series.columns = ["Rating", "Count"]
+            fig_dist = px.bar(
+                rating_series,
+                x="Rating",
+                y="Count",
+                title="Rating distribution",
+                labels={"Rating": "Rating", "Count": "Count"},
+                template="plotly_white",
+            )
+            chart_cols[0].plotly_chart(fig_dist, use_container_width=True)
+        else:
+            chart_cols[0].info("Rating distribution is unavailable because rating data is missing.")
 
-        sentiment_series = pd.DataFrame(
-            [(k, v) for k, v in sentiment_counts.items()], columns=["Sentiment", "Count"]
-        )
-        fig_sent = px.pie(sentiment_series, names="Sentiment", values="Count", title="Sentiment Distribution")
-        chart_cols[1].plotly_chart(fig_sent, use_container_width=True)
+        if sentiment_counts:
+            sentiment_series = pd.DataFrame(
+                [(k, v) for k, v in sentiment_counts.items()], columns=["Sentiment", "Count"]
+            )
+            fig_sent = px.pie(
+                sentiment_series,
+                names="Sentiment",
+                values="Count",
+                title="Sentiment breakdown",
+                template="plotly_white",
+            )
+            chart_cols[1].plotly_chart(fig_sent, use_container_width=True)
+        else:
+            chart_cols[1].info("Sentiment breakdown is unavailable because sentiment labels are missing.")
     except Exception:
         chart_cols[0].warning("Plotly unavailable: install plotly for charts.")
         chart_cols[1].warning("Plotly unavailable: install plotly for charts.")
 
     st.markdown("---")
-
-    theme_map = get_theme_keyword_map()
-    top_positive = _top_themes(df, theme_map, positive=True, top_n=4)
-    top_concerns = _top_themes(df, theme_map, positive=False, top_n=4)
-    recommendations = _aggregate_recommendations(df, theme_map, fallback=True)
 
     st.subheader("🏆 Top Positive Themes")
     if top_positive:
@@ -223,15 +253,20 @@ def render_faculty_dashboard():
         st.info("No common concerns have been detected yet.")
 
     st.markdown("---")
-    st.subheader("💡 AI Recommendations")
+    st.subheader("💡 Actionable Recommendations")
+    st.markdown("Recommendations below are based on stored theme mappings and feedback insights.")
     if recommendations:
         for rec in recommendations:
-            st.markdown(f"- {rec}")
+            st.markdown(f"<div class='recommendation-card'>✅ {rec}</div>", unsafe_allow_html=True)
     else:
-        st.info("No AI recommendations available yet.")
+        st.info("No AI recommendations available yet. Submit more feedback or check theme extraction settings.")
 
-    st.markdown("---")
-    st.subheader("📄 Recent Student Feedback")
-    recent = df.sort_values(by="ID", ascending=False).head(10)
-    cols = [c for c in recent.columns if c in ["Student", "Rating", "Sentiment", "Feedback"]]
-    st.dataframe(recent[cols])
+    if show_recent:
+        st.markdown("---")
+        st.subheader("📄 Recent Student Feedback")
+        recent = df.sort_values(by="ID", ascending=False).head(10)
+        cols = [c for c in recent.columns if c in ["Student", "Rating", "Sentiment", "Feedback"]]
+        if cols:
+            st.dataframe(recent[cols])
+        else:
+            st.info("Recent feedback details are unavailable because required columns are missing.")

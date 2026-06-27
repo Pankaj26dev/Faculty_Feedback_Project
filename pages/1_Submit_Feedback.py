@@ -1,11 +1,14 @@
 import streamlit as st
 from database.db import insert_feedback, get_all_faculty_subject_map
+from utils.ui import inject_css
 
 st.set_page_config(
     page_title="Student Feedback",
     page_icon="📝",
-    layout="centered"
+    layout="wide"
 )
+
+inject_css()
 
 st.title("Student Feedback Form")
 

@@ -5,29 +5,52 @@ CSS = """
 /* Page background and card styling */
 body {background-color: #f7fafc;}
 .header-card {
-  background: linear-gradient(90deg,#4f46e5,#06b6d4);
+  background: linear-gradient(90deg, #4f46e5, #06b6d4);
   color: white;
+  padding: 22px 24px;
+  border-radius: 14px;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.13);
+}
+.dashboard-card {
+  background: white;
   padding: 18px;
-  border-radius: 8px;
+  border-radius: 16px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+  margin-bottom: 16px;
 }
-.big-button {
-  display: inline-block;
-  width: 220px;
-  height: 80px;
-  line-height: 80px;
-  text-align: center;
-  border-radius: 8px;
-  background: #111827;
+.section-header {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #111827;
+  margin-bottom: 10px;
+}
+.recommendation-card {
+  border-left: 4px solid #2563eb;
+  background: #eff6ff;
+  padding: 16px 18px;
+  border-radius: 12px;
+  margin-bottom: 12px;
+}
+.feedback-card {
+  border-left: 4px solid #16a34a;
+  background: #ecfdf5;
+  padding: 16px 18px;
+  border-radius: 12px;
+  margin-bottom: 12px;
+}
+.small-note {
+  color: #475569;
+  font-size: 0.94rem;
+  line-height: 1.5;
+}
+.button-card {
+  background: #1f2937;
   color: white;
-  font-size: 18px;
-  margin: 8px;
-  text-decoration: none;
-}
-.secondary-button {
-  background: #10b981;
+  padding: 16px 18px;
+  border-radius: 12px;
 }
 .muted {
-  color: #6b7280;
+  color: #64748b;
 }
 </style>
 """

@@ -104,14 +104,20 @@ def load_taxonomy(path: Optional[str] = None):
     return rows
 
 
-def get_theme_keyword_map(path: Optional[str] = None) -> Dict[str, Dict[str, List[str]]]:
-    """Return a mapping of theme_id -> { 'theme_name': str, 'keywords': [...], 'patterns': {...} }.
+_THEME_KEYWORD_MAP: Optional[Dict[str, Dict]] = None
+
+
+def get_theme_keyword_map(path: Optional[str] = None) -> Dict[str, Dict]:
+    """Return a mapping of theme_id -> { 'theme_name': str, 'category': str, 'sentiment': str, 'recommendation': str, 'keywords': [...], 'patterns': {...} }.
 
     The `keywords` list is derived from the `keyword_patterns` column (split by '|').
     Additional pattern columns are returned under `patterns`.
     """
-    data = load_taxonomy(path)
+    global _THEME_KEYWORD_MAP
+    if _THEME_KEYWORD_MAP is not None and path is None:
+        return _THEME_KEYWORD_MAP
 
+    data = load_taxonomy(path)
     out: Dict[str, Dict[str, List[str]]] = {}
 
     if hasattr(data, "iterrows"):
@@ -119,24 +125,46 @@ def get_theme_keyword_map(path: Optional[str] = None) -> Dict[str, Dict[str, Lis
         for _, row in data.iterrows():
             tid = str(row.get("theme_id", "")).strip()
             tname = str(row.get("theme_name", "")).strip()
+            category = str(row.get("category", "")).strip()
+            sentiment = str(row.get("sentiment", "")).strip()
+            recommendation = str(row.get("recommendation", "")).strip()
             keywords = _split_keywords(row.get("keyword_patterns", ""))
             patterns = {
                 "broken_english": _split_keywords(row.get("broken_english_patterns", "")),
                 "normal_english": _split_keywords(row.get("normal_english_patterns", "")),
                 "advanced_English": _split_keywords(row.get("advanced_English_patterns", "")),
             }
-            out[tid] = {"theme_name": tname, "keywords": keywords, "patterns": patterns}
+            out[tid] = {
+                "theme_name": tname,
+                "category": category,
+                "sentiment": sentiment,
+                "recommendation": recommendation,
+                "keywords": keywords,
+                "patterns": patterns,
+            }
     else:
         # list of dicts
         for row in data:
             tid = str(row.get("theme_id", "")).strip()
             tname = str(row.get("theme_name", "")).strip()
+            category = str(row.get("category", "")).strip()
+            sentiment = str(row.get("sentiment", "")).strip()
+            recommendation = str(row.get("recommendation", "")).strip()
             keywords = _split_keywords(row.get("keyword_patterns", ""))
             patterns = {
                 "broken_english": _split_keywords(row.get("broken_english_patterns", "")),
                 "normal_english": _split_keywords(row.get("normal_english_patterns", "")),
                 "advanced_English": _split_keywords(row.get("advanced_English_patterns", "")),
             }
-            out[tid] = {"theme_name": tname, "keywords": keywords, "patterns": patterns}
+            out[tid] = {
+                "theme_name": tname,
+                "category": category,
+                "sentiment": sentiment,
+                "recommendation": recommendation,
+                "keywords": keywords,
+                "patterns": patterns,
+            }
 
+    if path is None:
+        _THEME_KEYWORD_MAP = out
     return out
